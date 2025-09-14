@@ -216,6 +216,98 @@ async def rss_sources_menu(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data.startswith("source_"))
+async def source_menu(callback: CallbackQuery):
+    source_id = int(callback.data.split("_")[1])
+    db = SessionLocal()
+    source = db.query(RSSSource).filter(RSSSource.id == source_id).first()
+    db.close()
+
+    if not source:
+        await callback.answer("Источник не найден!", show_alert=True)
+        return
+
+    status = "активен ✅" if source.is_active else "отключен ❌"
+    text = (
+        f"<b>Управление источником: {source.name}</b>\n\n"
+        f"<b>URL:</b> {source.url}\n"
+        f"<b>Статус:</b> {status}\n"
+        f"<b>Ошибок:</b> {source.error_count}"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(text=f"{'Отключить' if source.is_active else 'Включить'}", callback_data=f"toggle_source_{source_id}")],
+        [InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"delete_source_confirm_{source_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к источникам", callback_data=f"rss_{source.channel_id}")]
+    ]
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
+
+
+@router.callback_query(F.data.startswith("toggle_source_"))
+async def toggle_source_active(callback: CallbackQuery):
+    source_id = int(callback.data.split("_")[2])
+    db = SessionLocal()
+    source = toggle_rss_source(db, source_id)
+    db.close()
+
+    if source:
+        status = "включен" if source.is_active else "отключен"
+        await callback.answer(f"Источник {status}")
+        # Refresh меню источников
+        callback.data = f"rss_{source.channel_id}"
+        await rss_sources_menu(callback)
+    else:
+        await callback.answer("Ошибка при переключении!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("delete_source_confirm_"))
+async def delete_source_confirm(callback: CallbackQuery):
+    source_id = int(callback.data.split("_")[3])
+    db = SessionLocal()
+    source = db.query(RSSSource).filter(RSSSource.id == source_id).first()
+    db.close()
+
+    if not source:
+        await callback.answer("Источник не найден!", show_alert=True)
+        return
+
+    text = f"Вы уверены, что хотите удалить источник '{source.name}'?"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_source_{source_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"source_{source_id}")
+        ]
+    ]
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
+
+
+@router.callback_query(F.data.startswith("confirm_delete_source_"))
+async def delete_source_execute(callback: CallbackQuery):
+    source_id = int(callback.data.split("_")[3])
+    db = SessionLocal()
+    source = db.query(RSSSource).filter(RSSSource.id == source_id).first()
+    channel_id = source.channel_id if source else None
+    deleted = delete_rss_source(db, source_id)
+    db.close()
+
+    if deleted:
+        await callback.answer("Источник успешно удален", show_alert=True)
+        if channel_id:
+            callback.data = f"rss_{channel_id}"
+            await rss_sources_menu(callback)
+    else:
+        await callback.answer("Ошибка при удалении!", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("add_rss_"))
 async def add_rss_manual_start(callback: CallbackQuery, state: FSMContext):
     channel_id = int(callback.data.split("_")[2])
@@ -330,7 +422,8 @@ async def create_post_start(callback: CallbackQuery, bot: Bot):
                     processed_content, media_urls,
                     datetime.utcnow()
                 )
-                update_post_status(db, new_post.id, "published", message_id)
+                if new_post:  # Проверяем, не дубль ли
+                    update_post_status(db, new_post.id, "published", message_id)
                 await msg.edit_text(
                     "✅ Пост успешно опубликован!",
                     reply_markup=keyboards.channel_menu(channel_id)

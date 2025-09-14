@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from database.models import User, Channel, RSSSource, Post, SessionLocal
 from datetime import datetime, timedelta
 from typing import List, Optional
+from utils.helpers import generate_post_hash
 
 
 def get_db():
@@ -57,6 +58,19 @@ def get_active_sources(db: Session):
 
 def create_post(db: Session, channel_id: int, source_url: str, title: str, content: str, processed: str, media: list,
                 scheduled: datetime):
+
+    post_hash = generate_post_hash(title + " " + content)
+
+
+    existing_post = db.query(Post).filter(
+        Post.channel_id == channel_id,
+        Post.hash == post_hash
+    ).first()
+
+    if existing_post:
+
+        return None
+
     post = Post(
         channel_id=channel_id,
         source_url=source_url,
@@ -64,7 +78,8 @@ def create_post(db: Session, channel_id: int, source_url: str, title: str, conte
         original_content=content,
         processed_content=processed,
         media_urls=media,
-        scheduled_time=scheduled
+        scheduled_time=scheduled,
+        hash=post_hash  # Сохраняем хэш
     )
     db.add(post)
     db.commit()
@@ -119,6 +134,14 @@ def toggle_channel_active(db: Session, channel_id: int):
         channel.is_active = not channel.is_active
         db.commit()
     return channel
+
+
+def toggle_rss_source(db: Session, source_id: int):
+    source = db.query(RSSSource).filter(RSSSource.id == source_id).first()
+    if source:
+        source.is_active = not source.is_active
+        db.commit()
+    return source
 
 
 def update_channel_settings(db: Session, channel_id: int, **kwargs):

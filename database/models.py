@@ -64,6 +64,7 @@ class Post(Base):
     scheduled_time = Column(DateTime)
     published_time = Column(DateTime)
     message_id = Column(Integer)
+    hash = Column(String, index=True, nullable=True)
     channel = relationship("Channel", back_populates="posts")
 
 

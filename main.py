@@ -8,6 +8,7 @@ from config.settings import BOT_TOKEN
 from bot.handlers import router
 from admin.panel import admin_router
 from core.scheduler import Scheduler
+from database.models import engine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -21,10 +22,24 @@ async def set_main_menu(bot: Bot):
     ]
     await bot.set_my_commands(main_menu_commands)
 
+def migrate_db():
+
+    with engine.connect() as conn:
+        try:
+            conn.execute("ALTER TABLE posts ADD COLUMN hash TEXT")
+            logger.info("Миграция: Добавлено поле hash в таблицу posts")
+        except Exception as e:
+            if "duplicate" in str(e).lower():
+                logger.info("Миграция: Поле hash уже существует")
+            else:
+                logger.error(f"Ошибка миграции: {e}")
+
 async def main():
     if not BOT_TOKEN:
         logger.critical("BOT_TOKEN не найден! Проверьте ваш .env файл.")
         return
+
+    migrate_db()
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())

@@ -3,11 +3,15 @@ from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
 from typing import Dict, Callable
 import asyncio
+import logging
 from database.crud import *
 from database.models import SessionLocal, Post
 from core.rss_parser import RSSParser
 from core.ai_processor import AIProcessor
 from core.publisher import Publisher
+
+
+logger = logging.getLogger(__name__)
 
 
 class Scheduler:
@@ -70,17 +74,21 @@ class Scheduler:
                                 else:
                                     next_time = datetime.utcnow() + timedelta(minutes=5)
 
-                                create_post(
+
+                                new_post = create_post(
                                     db, channel.id, source.url,
                                     entry['title'], entry['content'],
                                     processed, entry.get('media', []),
                                     next_time
                                 )
+                                if new_post is None:
+                                    logger.info(f"Duplicate post skipped for channel {channel.id} from source {source.url}")
 
                             if entries:
                                 update_source_check(db, source.id, entries[0]['guid'])
 
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"Error processing source {source.url}: {e}")
                         update_source_check(db, source.id, error=True)
         finally:
             db.close()
