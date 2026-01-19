@@ -1,17 +1,29 @@
 import asyncio
 import logging
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
-from config.settings import BOT_TOKEN
+from config.settings import BOT_TOKEN, GROQ_API_KEY
 from bot.handlers import router
 from admin.panel import admin_router
 from core.scheduler import Scheduler
-from database.models import engine
+from database.models import engine, Base
+from sqlalchemy import text
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+# Настройка логирования с поддержкой UTF-8
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log", encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ],
+    force=True
+)
 logger = logging.getLogger(__name__)
+
 
 async def set_main_menu(bot: Bot):
     main_menu_commands = [
@@ -22,22 +34,43 @@ async def set_main_menu(bot: Bot):
     ]
     await bot.set_my_commands(main_menu_commands)
 
+
 def migrate_db():
+    """Безопасная миграция базы данных"""
+    logger.info("🔍 Проверка необходимости миграции базы данных...")
 
     with engine.connect() as conn:
         try:
-            conn.execute("ALTER TABLE posts ADD COLUMN hash TEXT")
-            logger.info("Миграция: Добавлено поле hash в таблицу posts")
-        except Exception as e:
-            if "duplicate" in str(e).lower():
-                logger.info("Миграция: Поле hash уже существует")
+            # Проверяем, существует ли столбец hash в таблице posts
+            result = conn.execute(text("""
+                SELECT name FROM pragma_table_info('posts') WHERE name = 'hash'
+            """))
+
+            if not result.fetchone():
+                logger.info("🔧 Столбец 'hash' отсутствует в таблице posts. Выполняем миграцию...")
+                conn.execute(text("ALTER TABLE posts ADD COLUMN hash TEXT"))
+                conn.commit()
+                logger.info("✅ Миграция успешна: добавлен столбец hash в таблицу posts")
             else:
-                logger.error(f"Ошибка миграции: {e}")
+                logger.info("✅ Столбец 'hash' уже существует в таблице posts, миграция не требуется")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка при миграции базы данных: {str(e)}", exc_info=True)
+            logger.info("🔧 Попытка восстановления структуры базы данных...")
+            # Создаем таблицы, если они не существуют
+            Base.metadata.create_all(engine)
+            logger.info("✅ Структура базы данных восстановлена")
+
 
 async def main():
     if not BOT_TOKEN:
-        logger.critical("BOT_TOKEN не найден! Проверьте ваш .env файл.")
+        logger.critical("❌ BOT_TOKEN не найден! Проверьте ваш .env файл.")
         return
+
+    if not GROQ_API_KEY:
+        logger.critical("❌ GROQ_API_KEY не найден! Проверьте ваш .env файл.")
+        return
+
 
     migrate_db()
 
@@ -53,16 +86,19 @@ async def main():
     scheduler.start()
 
     try:
-        logger.info("Бот запущен")
+        logger.info("✅ Бот запущен и готов к работе")
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
         scheduler.stop()
         await bot.session.close()
-        logger.info("Бот остановлен")
+        logger.info("🛑 Бот остановлен")
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Остановка по команде пользователя")
+        logger.info("🛑 Остановка по команде пользователя")
+    except Exception as e:
+        logger.critical(f"❌ Критическая ошибка при запуске бота: {str(e)}", exc_info=True)
